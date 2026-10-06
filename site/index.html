@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="{{description}}" />
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#f3f0e8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1c1c19" media="(prefers-color-scheme: dark)" />
+    <meta property="og:title" content="{{title}}" />
+    <meta property="og:description" content="{{description}}" />
+    <title>{{title}}</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="alternate" type="application/atom+xml;profile=opds-catalog;kind=acquisition" href="./opds.xml" title="{{title}} (OPDS)" />
+    <link rel="preload" href="./catalog.json" as="fetch" crossorigin="anonymous" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#books">Skip to the books</a>
+
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow" id="owner-line">A personal library</p>
+        <h1 id="shelf-title">{{title}}</h1>
+        <p class="deck" id="shelf-description">{{description}}</p>
+        <p class="stats" id="shelf-stats" aria-live="polite">Opening the shelf…</p>
+      </div>
+    </header>
+
+    <main class="library" id="books" tabindex="-1">
+      <div class="controls">
+        <form class="search" id="search" role="search">
+          <label class="sr-only" for="query">Search this library</label>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
+          <input id="query" type="search" autocomplete="off" spellcheck="false" placeholder="Title, author, or tag" />
+          <kbd aria-hidden="true">/</kbd>
+        </form>
+        <div class="filters">
+          <div class="chips" id="shelf-filter" role="group" aria-label="Shelf"></div>
+          <div class="filter-end">
+            <div class="segmented" id="format-filter" role="group" aria-label="Format">
+              <button type="button" data-format="" aria-pressed="true">All</button>
+              <button type="button" data-format="epub" aria-pressed="false">EPUB</button>
+              <button type="button" data-format="pdf" aria-pressed="false">PDF</button>
+            </div>
+            <label class="sort">
+              <span class="sr-only">Sort books</span>
+              <select id="sort">
+                <option value="added">Recently added</option>
+                <option value="title">Title</option>
+                <option value="author">Author</option>
+                <option value="length">Shortest listen</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <p class="status" id="status" role="status" aria-live="polite"></p>
+      <ul class="grid" id="grid" aria-label="Books"></ul>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        <p>
+          Listen to any book with <a id="hear-link" href="https://hear.satyam.lol/">Hear</a> — narration is generated privately on your device.
+        </p>
+        <p>
+          Add this library to a reading app with its OPDS feed:
+          <button type="button" class="copy" id="copy-opds" data-url="">Copy feed link</button>
+          · <a href="./catalog.json">catalog.json</a>
+        </p>
+        <p class="fine" id="updated-line"></p>
+      </div>
+    </footer>
+
+    <dialog class="book-sheet" id="book-sheet" aria-labelledby="book-title">
+      <button class="close" type="button" id="close-sheet" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+      </button>
+      <div class="sheet-layout">
+        <div class="sheet-cover" id="book-cover"></div>
+        <div class="sheet-body">
+          <p class="eyebrow" id="book-eyebrow"></p>
+          <h2 id="book-title"></h2>
+          <p class="sheet-author" id="book-author"></p>
+          <p class="sheet-facts" id="book-facts"></p>
+          <div class="sheet-actions">
+            <a class="button button-primary" id="book-listen" target="_blank" rel="noopener">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 7 8 5-8 5V7Z" /></svg>
+              <span>Listen in Hear</span>
+            </a>
+            <a class="button" id="book-read" target="_blank" rel="noopener">Read</a>
+            <a class="button" id="book-download" download>Download</a>
+          </div>
+          <p class="sheet-listen-note" id="book-listen-note" hidden></p>
+          <blockquote class="sheet-note" id="book-note" hidden></blockquote>
+          <p class="sheet-description" id="book-description"></p>
+          <ul class="tags" id="book-tags" aria-label="Tags"></ul>
+        </div>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
