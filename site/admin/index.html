@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#eee8dc" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#171511" media="(prefers-color-scheme: dark)" />
+    <title>Shelf admin</title>
+    <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./admin.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "yaml": "../vendor/yaml/index.js",
+          "fflate": "../vendor/fflate.js",
+          "@xmldom/xmldom": "./xmldom.js",
+          "pdfjs": "../vendor/pdfjs/pdf.min.mjs"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <p class="boot" id="boot">Opening the back room…</p>
+
+    <!-- Connect ──────────────────────────────────────────────────────────── -->
+    <main class="connect" id="connect-view" hidden>
+      <div class="connect-card">
+        <p class="mark">Ex libris · Admin</p>
+        <h1>Look after the shelf from any browser.</h1>
+        <p class="connect-lede">
+          Add books, fix titles, move things between shelves. Every change is saved to
+          <a id="repo-link" href="https://github.com/sudotman/shelf" target="_blank" rel="noopener"><code id="repo-name">sudotman/shelf</code></a>
+          on GitHub, and the site rebuilds itself in about a minute.
+        </p>
+        <ol class="connect-steps">
+          <li>
+            <a id="token-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained token</a>.
+            The link fills in the name and the permissions (<strong>Contents: Read and write</strong>, <strong>Actions: Read</strong>);
+            under <em>Repository access</em>, choose <strong>Only select repositories</strong> and pick <code class="repo-inline">shelf</code>.
+          </li>
+          <li>Generate it and paste it below.</li>
+        </ol>
+        <form class="connect-form" id="connect-form" novalidate>
+          <label for="token">GitHub token</label>
+          <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…" required />
+          <label class="check"><input type="checkbox" id="remember" /> Remember on this device</label>
+          <button type="submit" class="primary" id="connect-button">Connect</button>
+          <p class="form-error" id="connect-error" role="alert" hidden></p>
+        </form>
+        <p class="fine">
+          The token stays in this browser and is only ever sent to api.github.com. Without “remember”, it is forgotten when this tab closes.
+          A remembered token can be read by other pages on this domain, so only remember it on your own devices.
+        </p>
+      </div>
+    </main>
+
+    <!-- Console ──────────────────────────────────────────────────────────── -->
+    <div class="console" id="console-view" hidden>
+      <header class="bar">
+        <a class="brand" href="../" target="_blank" rel="noopener"><span>Ex libris</span> <em id="brand-owner">Satyam</em></a>
+        <span class="bar-section">Admin</span>
+        <div class="bar-end">
+          <button type="button" class="text-button" id="reload-button" title="Load the latest from GitHub">Reload</button>
+          <span class="who"><img id="avatar" alt="" width="22" height="22" /><span id="login"></span></span>
+          <button type="button" class="text-button" id="sign-out">Sign out</button>
+        </div>
+      </header>
+
+      <div class="layout" id="layout">
+        <aside class="sidebar" aria-label="Books">
+          <div class="sidebar-tools">
+            <button type="button" class="add-button" id="add-button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              Add books
+            </button>
+            <input id="file-input" type="file" accept=".epub,.pdf,application/epub+zip,application/pdf" multiple hidden />
+            <label class="sr-only" for="filter">Filter books</label>
+            <input id="filter" class="filter" type="search" placeholder="Filter the shelf  /" autocomplete="off" />
+          </div>
+          <nav class="book-list" id="book-list"></nav>
+          <button type="button" class="settings-link" id="settings-button">Library details</button>
+        </aside>
+        <main class="pane" id="pane" tabindex="-1"></main>
+      </div>
+
+      <footer class="changes" id="changes-bar" hidden>
+        <p class="changes-summary" id="changes-summary" aria-live="polite"></p>
+        <button type="button" class="text-button" id="discard-all">Discard all</button>
+        <button type="button" class="primary" id="publish-button">Publish</button>
+      </footer>
+    </div>
+
+    <div class="drop-overlay" id="drop-overlay" hidden>
+      <p>Drop to put on the shelf</p>
+    </div>
+
+    <datalist id="shelf-options"></datalist>
+
+    <!-- Templates ────────────────────────────────────────────────────────── -->
+    <template id="welcome-template">
+      <section class="welcome">
+        <button type="button" class="dropzone" data-action="choose-files">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M10 40V10a2 2 0 0 1 2-2h7v32M19 40V12a2 2 0 0 1 2-2h6v30M27 40l6-28a2 2 0 0 1 2.4-1.5l4 .9a2 2 0 0 1 1.5 2.4L35 40M6 40h36" /></svg>
+          <strong>Drop EPUBs or PDFs here</strong>
+          <span>or click to choose files. Titles, authors, and covers are read for you.</span>
+        </button>
+        <p class="welcome-tally" data-ref="tally"></p>
+      </section>
+    </template>
+
+    <template id="editor-template">
+      <article class="editor">
+        <button type="button" class="back-button" data-action="back">← All books</button>
+        <div class="editor-head">
+          <div class="editor-cover">
+            <div class="cover-frame" data-ref="cover"></div>
+            <div class="cover-actions">
+              <button type="button" class="text-button" data-action="choose-cover">Replace cover</button>
+              <button type="button" class="text-button" data-action="reset-cover" hidden>Use the file’s cover</button>
+              <input type="file" accept="image/jpeg,image/png,image/webp" hidden data-ref="cover-input" />
+            </div>
+          </div>
+          <div class="editor-title">
+            <p class="state" data-ref="state"></p>
+            <h2 data-ref="heading"></h2>
+            <p class="byline" data-ref="byline"></p>
+            <p class="facts" data-ref="facts"></p>
+            <ul class="notices" data-ref="notices"></ul>
+          </div>
+        </div>
+
+        <form class="fields" data-ref="form" novalidate>
+          <label class="field wide"><span>Title</span><input name="title" autocomplete="off" /></label>
+          <label class="field wide"><span>Author <small>separate several with commas</small></span><input name="author" autocomplete="off" /></label>
+          <label class="field"><span>Shelf <small>pick one or type a new name</small></span><input name="shelf" list="shelf-options" autocomplete="off" placeholder="Unshelved" /></label>
+          <label class="field"><span>Year</span><input name="year" inputmode="numeric" autocomplete="off" placeholder="e.g. 1854" /></label>
+          <fieldset class="field">
+            <legend>Status</legend>
+            <div class="choice" data-ref="status" role="group" aria-label="Reading status">
+              <button type="button" data-value="">—</button>
+              <button type="button" data-value="want">Want to read</button>
+              <button type="button" data-value="reading">Reading</button>
+              <button type="button" data-value="read">Read</button>
+            </div>
+          </fieldset>
+          <fieldset class="field">
+            <legend>Rating</legend>
+            <div class="stars" data-ref="rating" role="group" aria-label="Rating">
+              <button type="button" data-value="1" aria-label="1 star">★</button>
+              <button type="button" data-value="2" aria-label="2 stars">★</button>
+              <button type="button" data-value="3" aria-label="3 stars">★</button>
+              <button type="button" data-value="4" aria-label="4 stars">★</button>
+              <button type="button" data-value="5" aria-label="5 stars">★</button>
+            </div>
+          </fieldset>
+          <label class="field wide"><span>Tags <small>comma separated</small></span><input name="tags" autocomplete="off" placeholder="stoicism, favourites" /></label>
+          <label class="field wide"><span>Note <small>shown on the book’s page</small></span><textarea name="note" rows="2"></textarea></label>
+          <details class="more wide">
+            <summary>More</summary>
+            <div class="more-grid">
+              <label class="field wide"><span>Description</span><textarea name="description" rows="5"></textarea></label>
+              <label class="field" data-ref="id-field"><span>File name <small>used in links; can’t change later</small></span><input name="id" autocomplete="off" spellcheck="false" /></label>
+              <fieldset class="field">
+                <legend>Hear reads it as</legend>
+                <div class="choice" data-ref="kind" role="group" aria-label="Kind">
+                  <button type="button" data-value="book">A book</button>
+                  <button type="button" data-value="article">An article</button>
+                </div>
+              </fieldset>
+              <label class="toggle wide"><input type="checkbox" name="listen" /> Offer “Listen in Hear”</label>
+              <label class="toggle wide"><input type="checkbox" name="hidden" /> Keep the file but hide it from the site</label>
+            </div>
+          </details>
+        </form>
+
+        <div class="editor-foot">
+          <button type="button" class="text-button" data-action="revert" hidden>Undo changes to this book</button>
+          <button type="button" class="danger-button" data-action="remove">Remove from the shelf</button>
+          <button type="button" class="text-button" data-action="restore" hidden>Keep it after all</button>
+          <a class="text-button" data-ref="view-link" target="_blank" rel="noopener" hidden>View on the shelf ↗</a>
+        </div>
+      </article>
+    </template>
+
+    <template id="settings-template">
+      <article class="editor settings">
+        <button type="button" class="back-button" data-action="back">← All books</button>
+        <p class="state">The whole shelf</p>
+        <h2>Library details</h2>
+        <form class="fields" data-ref="form" novalidate>
+          <label class="field wide"><span>Title <small>the page title and Hear’s section name</small></span><input name="title" autocomplete="off" /></label>
+          <label class="field"><span>Owner <small>shown on the bookplate</small></span><input name="owner" autocomplete="off" /></label>
+          <label class="field wide"><span>Description</span><textarea name="description" rows="3"></textarea></label>
+        </form>
+        <dl class="connection">
+          <dt>Repository</dt><dd><a data-ref="repo" target="_blank" rel="noopener"></a></dd>
+          <dt>Branch</dt><dd data-ref="branch"></dd>
+          <dt>Signed in as</dt><dd data-ref="login"></dd>
+        </dl>
+      </article>
+    </template>
+
+    <dialog class="publish" id="publish-dialog" aria-labelledby="publish-title">
+      <form method="dialog" class="publish-inner" id="publish-form">
+        <h2 id="publish-title">Publish to the shelf</h2>
+        <ul class="publish-lines" id="publish-lines"></ul>
+        <label class="field wide" id="message-field"><span>Commit message</span><textarea id="commit-message" rows="5" spellcheck="false"></textarea></label>
+        <ol class="steps" id="publish-steps" hidden></ol>
+        <p class="form-error" id="publish-error" role="alert" hidden></p>
+        <div class="publish-actions">
+          <button type="button" class="text-button" id="publish-cancel">Not yet</button>
+          <button type="submit" class="primary" id="publish-confirm" value="publish">Publish</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./admin.js"></script>
+  </body>
+</html>

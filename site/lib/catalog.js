@@ -1,7 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
-import { cleanText, escapeXml, listeningMinutes, slugify } from "./text.js";
+// Catalog rules shared by the build (Node) and the admin console (browser).
+// Keep this file free of Node imports.
+import { cleanText, escapeXml, listeningMinutes } from "./text.js";
 
 export const CATALOG_VERSION = 1;
 export const FORMATS = {
@@ -9,7 +8,9 @@ export const FORMATS = {
   pdf: { mediaType: "application/pdf", label: "PDF" },
 };
 // Hear's own import limits; larger files stay downloadable but not listenable.
-const HEAR_LIMITS = { epubBytes: 100 * 1024 * 1024, pdfBytes: 50 * 1024 * 1024, pdfPages: 500 };
+export const HEAR_LIMITS = { epubBytes: 100 * 1024 * 1024, pdfBytes: 50 * 1024 * 1024, pdfPages: 500 };
+// GitHub rejects larger files outside Git LFS.
+export const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
 export function shelfLabel(slug, labels = {}) {
   if (!slug) return "";
@@ -17,63 +18,8 @@ export function shelfLabel(slug, labels = {}) {
   return slug.split("-").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
 }
 
-// Every .epub/.pdf under books/. The first folder is the book's shelf.
-export function scanBooks(booksDir) {
-  const found = [];
-  const walk = (directory) => {
-    let entries;
-    try {
-      entries = readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (entry.name.startsWith(".") || entry.name.startsWith("_")) continue;
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        walk(path);
-        continue;
-      }
-      const extension = entry.name.split(".").pop().toLowerCase();
-      if (!FORMATS[extension] || !entry.isFile()) continue;
-      const rel = relative(booksDir, path).split(sep).join("/");
-      const parts = rel.split("/");
-      found.push({
-        path,
-        rel,
-        extension,
-        id: slugify(entry.name.slice(0, -(extension.length + 1))),
-        shelf: parts.length > 1 ? slugify(parts[0]) : "",
-        size: statSync(path).size,
-      });
-    }
-  };
-  walk(booksDir);
-  return found.sort((left, right) => left.rel.localeCompare(right.rel));
-}
-
-// When each file was first committed, so "recently added" survives fresh CI
-// checkouts. Needs full history (fetch-depth: 0); falls back to mtime.
-export function gitAddedDates(repoRoot, booksPath = "books") {
-  const dates = new Map();
-  try {
-    const output = execFileSync(
-      "git",
-      ["-c", "core.quotepath=off", "log", "--diff-filter=A", "--name-only", "--format=%x00%aI", "--", booksPath],
-      { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 },
-    );
-    for (const block of output.split("\0").filter(Boolean)) {
-      const [date, ...files] = block.split("\n").map((line) => line.trim()).filter(Boolean);
-      for (const file of files) {
-        const rel = file.startsWith(`${booksPath}/`) ? file.slice(booksPath.length + 1) : file;
-        // git log runs newest first, so the last write wins: the first commit.
-        dates.set(rel, new Date(date).toISOString());
-      }
-    }
-  } catch {
-    // Not a git checkout, or git is unavailable.
-  }
-  return dates;
+export function defaultKind(format, pages) {
+  return format === "epub" || (pages || 0) >= 48 ? "book" : "article";
 }
 
 function downloadName(title, authors, extension) {
@@ -85,19 +31,19 @@ function downloadName(title, authors, extension) {
   return `${base || "book"}.${extension}`;
 }
 
-function listenability(file, meta, override) {
-  if (override.listen === false) return { listenable: false, listenNote: "Turned off for Hear in shelf.yml." };
-  if (!meta.hasText) {
+export function listenability({ format, size, pages, hasText, listen }) {
+  if (listen === false) return { listenable: false, listenNote: "Turned off for Hear in shelf.yml." };
+  if (!hasText) {
     return {
       listenable: false,
-      listenNote: file.extension === "pdf" ? "Scanned PDF — needs OCR before it can be narrated." : "No readable text found.",
+      listenNote: format === "pdf" ? "Scanned PDF — needs OCR before it can be narrated." : "No readable text found.",
     };
   }
-  if (file.extension === "pdf" && meta.pages > HEAR_LIMITS.pdfPages) {
+  if (format === "pdf" && pages > HEAR_LIMITS.pdfPages) {
     return { listenable: false, listenNote: `Over Hear's ${HEAR_LIMITS.pdfPages}-page PDF limit.` };
   }
-  const limit = file.extension === "pdf" ? HEAR_LIMITS.pdfBytes : HEAR_LIMITS.epubBytes;
-  if (file.size > limit) return { listenable: false, listenNote: `Over Hear's ${Math.round(limit / 1024 / 1024)} MB import limit.` };
+  const limit = format === "pdf" ? HEAR_LIMITS.pdfBytes : HEAR_LIMITS.epubBytes;
+  if (size > limit) return { listenable: false, listenNote: `Over Hear's ${Math.round(limit / 1024 / 1024)} MB import limit.` };
   return { listenable: true, listenNote: "" };
 }
 
@@ -105,10 +51,10 @@ function listenability(file, meta, override) {
 export function buildEntry({ file, meta, override = {}, sha256, cover, addedAt, settings }) {
   const title = cleanText(override.title || meta.title) || file.id.replace(/-/g, " ");
   const authors = override.authors?.length ? override.authors : meta.authors;
-  const kind = override.kind || (file.extension === "epub" || (meta.pages || 0) >= 48 ? "book" : "article");
   const shelf = file.shelf;
   const entry = {
     id: file.id,
+    path: file.rel ? `books/${file.rel}` : "",
     title,
     subtitle: override.subtitle || "",
     authors,
@@ -130,7 +76,7 @@ export function buildEntry({ file, meta, override = {}, sha256, cover, addedAt, 
     note: override.note || "",
     format: file.extension,
     mediaType: FORMATS[file.extension].mediaType,
-    kind,
+    kind: override.kind || defaultKind(file.extension, meta.pages),
     file: `files/${file.id}.${file.extension}`,
     fileName: downloadName(title, authors, file.extension),
     size: file.size,
@@ -138,10 +84,11 @@ export function buildEntry({ file, meta, override = {}, sha256, cover, addedAt, 
     cover: cover ? `covers/${file.id}.${sha256.slice(0, 8)}.${cover.extension}` : "",
     coverWidth: cover?.width ?? null,
     coverHeight: cover?.height ?? null,
+    color: cover?.color || "",
     pages: meta.pages ?? null,
     words: meta.words || 0,
     minutes: listeningMinutes(meta.words || 0),
-    ...listenability(file, meta, override),
+    ...listenability({ format: file.extension, size: file.size, pages: meta.pages, hasText: meta.hasText, listen: override.listen }),
     addedAt: override.addedAt || addedAt,
     hear: "",
   };
@@ -157,7 +104,7 @@ export function sortEntries(entries) {
   ));
 }
 
-export function buildCatalog(entries, settings, generatedAt = new Date().toISOString()) {
+export function buildCatalog(entries, settings, { generatedAt = new Date().toISOString(), repository = "" } = {}) {
   const shelves = new Map();
   for (const entry of entries) {
     if (!entry.shelf) continue;
@@ -172,6 +119,7 @@ export function buildCatalog(entries, settings, generatedAt = new Date().toISOSt
     description: settings.description,
     url: settings.url,
     hear: settings.hear,
+    repository,
     generatedAt,
     count: entries.length,
     shelves: [...shelves.values()].sort((left, right) => left.label.localeCompare(right.label)),

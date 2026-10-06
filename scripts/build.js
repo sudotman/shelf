@@ -7,13 +7,27 @@
 import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildCatalog, buildOpds } from "./lib/catalog.js";
+import { buildCatalog, buildOpds } from "../site/lib/catalog.js";
 import { readLibrary } from "./lib/library.js";
-import { escapeXml, formatBytes } from "./lib/text.js";
+import { escapeXml, formatBytes } from "../site/lib/text.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const DIST = join(ROOT, "dist");
 const listOnly = process.argv.includes("--list");
+
+// Browser builds of the packages the admin console imports (see the import map
+// in site/admin/index.html). The library modules it shares with this build
+// live in site/lib/ and ship with the rest of site/.
+const VENDOR = {
+  "fflate.js": "node_modules/fflate/esm/browser.js",
+  yaml: "node_modules/yaml/browser",
+  // The legacy build polyfills recent APIs (Promise.try and friends) that
+  // older iOS Safari lacks.
+  "pdfjs/pdf.min.mjs": "node_modules/pdfjs-dist/legacy/build/pdf.min.mjs",
+  "pdfjs/pdf.worker.min.mjs": "node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+  "pdfjs/standard_fonts": "node_modules/pdfjs-dist/standard_fonts",
+  "pdfjs/cmaps": "node_modules/pdfjs-dist/cmaps",
+};
 
 const warnings = [];
 const warn = (message) => warnings.push(message);
@@ -40,12 +54,19 @@ function renderSiteIndex(catalog) {
   const description = catalog.description || `${catalog.count} books from ${catalog.title}.`;
   return readFileSync(join(ROOT, "site", "index.html"), "utf8")
     .replaceAll("{{title}}", escapeXml(catalog.title))
+    .replaceAll("{{owner}}", escapeXml(catalog.owner || catalog.title))
     .replaceAll("{{description}}", escapeXml(description));
+}
+
+function copyVendorBuilds() {
+  for (const [target, source] of Object.entries(VENDOR)) {
+    cpSync(join(ROOT, source), join(DIST, "vendor", target), { recursive: true });
+  }
 }
 
 const started = Date.now();
 let extracted = 0;
-const { settings, books } = await readLibrary({
+const { settings, books, repository } = await readLibrary({
   root: ROOT,
   warn,
   onBook({ file, cached, skipped }) {
@@ -56,7 +77,7 @@ const { settings, books } = await readLibrary({
     }
   },
 });
-const catalog = buildCatalog(books.map((book) => book.entry), settings);
+const catalog = buildCatalog(books.map((book) => book.entry), settings, { repository });
 
 if (listOnly) {
   printTable(catalog.books);
@@ -66,6 +87,7 @@ if (listOnly) {
   mkdirSync(join(DIST, "covers"), { recursive: true });
   cpSync(join(ROOT, "site"), DIST, { recursive: true });
   writeFileSync(join(DIST, "index.html"), renderSiteIndex(catalog));
+  copyVendorBuilds();
 
   let totalBytes = 0;
   for (const { entry, file, cover } of books) {

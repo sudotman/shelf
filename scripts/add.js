@@ -7,11 +7,12 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { basename, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDocument } from "yaml";
-import { FORMATS, scanBooks } from "./lib/catalog.js";
-import { STATUSES } from "./lib/config.js";
-import { readEpub } from "./lib/epub.js";
+import { FORMATS } from "../site/lib/catalog.js";
+import { scanBooks } from "./lib/library.js";
+import { STATUSES } from "../site/lib/config.js";
+import { readEpub } from "../site/lib/epub.js";
 import { readPdf } from "./lib/pdf.js";
-import { formatBytes, slugify } from "./lib/text.js";
+import { formatBytes, slugify } from "../site/lib/text.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const BOOKS = join(ROOT, "books");

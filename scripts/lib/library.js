@@ -1,14 +1,101 @@
+// Node-side library reading: scans books/, extracts metadata (cached by file
+// hash), and merges shelf.yml. The pure rules live in catalog.js/config.js.
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { buildEntry, gitAddedDates, scanBooks } from "./catalog.js";
-import { loadConfig } from "./config.js";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
+import { FORMATS, buildEntry } from "../../site/lib/catalog.js";
+import { parseConfig } from "../../site/lib/config.js";
 import { normalizeCover } from "./cover.js";
-import { readEpub } from "./epub.js";
+import { readEpub } from "../../site/lib/epub.js";
 import { readPdf } from "./pdf.js";
+import { slugify } from "../../site/lib/text.js";
 
 // Bump when extraction changes so cached metadata is re-read.
-const EXTRACTOR_VERSION = 2;
+const EXTRACTOR_VERSION = 3;
+
+export function loadConfig(path, warn) {
+  return parseConfig(existsSync(path) ? readFileSync(path, "utf8") : "", warn);
+}
+
+// Every .epub/.pdf under books/. The first folder is the book's shelf.
+export function scanBooks(booksDir) {
+  const found = [];
+  const walk = (directory) => {
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".") || entry.name.startsWith("_")) continue;
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        walk(path);
+        continue;
+      }
+      const extension = entry.name.split(".").pop().toLowerCase();
+      if (!FORMATS[extension] || !entry.isFile()) continue;
+      const rel = relative(booksDir, path).split(sep).join("/");
+      const parts = rel.split("/");
+      found.push({
+        path,
+        rel,
+        extension,
+        id: slugify(entry.name.slice(0, -(extension.length + 1))),
+        shelf: parts.length > 1 ? slugify(parts[0]) : "",
+        size: statSync(path).size,
+      });
+    }
+  };
+  walk(booksDir);
+  return found.sort((left, right) => left.rel.localeCompare(right.rel));
+}
+
+function git(root, args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+}
+
+// When each file was first committed, so "recently added" survives fresh CI
+// checkouts and moves between shelves (renames carry the date along). Needs
+// full history (fetch-depth: 0); falls back to mtime.
+export function gitAddedDates(repoRoot, booksPath = "books") {
+  const dates = new Map();
+  const relative = (file) => (file.startsWith(`${booksPath}/`) ? file.slice(booksPath.length + 1) : file);
+  try {
+    const output = git(repoRoot, [
+      "-c", "core.quotepath=off", "log", "--reverse", "-M", "--diff-filter=AR", "--name-status", "--format=%x00%aI", "--", booksPath,
+    ]);
+    for (const block of output.split("\0").filter(Boolean)) {
+      const [date, ...changes] = block.split("\n").map((line) => line.trim()).filter(Boolean);
+      const when = new Date(date).toISOString();
+      for (const change of changes) {
+        const [status, first, second] = change.split("\t");
+        if (status.startsWith("R") && second) {
+          dates.set(relative(second), dates.get(relative(first)) || when);
+          dates.delete(relative(first));
+        } else if (status === "A" && first) {
+          dates.set(relative(first), when);
+        }
+      }
+    }
+  } catch {
+    // Not a git checkout, or git is unavailable.
+  }
+  return dates;
+}
+
+// "owner/name" of the GitHub repository, which the admin console commits to.
+export function repositoryName(repoRoot) {
+  if (process.env.GITHUB_REPOSITORY) return process.env.GITHUB_REPOSITORY;
+  try {
+    const remote = git(repoRoot, ["remote", "get-url", "origin"]).trim();
+    return remote.match(/github\.com[/:]([^/]+\/[^/.]+?)(?:\.git)?$/)?.[1] || "";
+  } catch {
+    return "";
+  }
+}
 
 export async function extractMetadata(buffer, extension) {
   const meta = extension === "pdf" ? await readPdf(buffer) : readEpub(buffer);
@@ -37,7 +124,7 @@ function writeCache(cacheDir, sha256, { meta, cover }) {
   mkdirSync(cacheDir, { recursive: true });
   const paths = cachePaths(cacheDir, sha256);
   if (cover) writeFileSync(paths.cover(cover.extension), cover.bytes);
-  const coverInfo = cover ? { extension: cover.extension, width: cover.width, height: cover.height } : null;
+  const coverInfo = cover ? { extension: cover.extension, width: cover.width, height: cover.height, color: cover.color } : null;
   writeFileSync(paths.meta, JSON.stringify({ version: EXTRACTOR_VERSION, meta, cover: coverInfo }));
 }
 
@@ -99,5 +186,5 @@ export async function readLibrary({ root, warn = () => {}, onBook = () => {} }) 
     books.push({ entry, file, cover });
     onBook({ file, entry, cached });
   }
-  return { settings, books };
+  return { settings, books, repository: repositoryName(root) };
 }

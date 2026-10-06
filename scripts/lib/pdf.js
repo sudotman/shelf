@@ -1,7 +1,8 @@
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { cleanText, countWords, displayName } from "./text.js";
+import { hasSelectableText, pdfMetadata } from "../../site/lib/pdf-meta.js";
+import { countWords } from "../../site/lib/text.js";
 
 const require = createRequire(import.meta.url);
 const PDFJS_ROOT = dirname(require.resolve("pdfjs-dist/package.json"));
@@ -14,21 +15,6 @@ let pdfjsPromise;
 function loadPdfjs() {
   pdfjsPromise ||= import("pdfjs-dist/legacy/build/pdf.mjs");
   return pdfjsPromise;
-}
-
-// PDF dates look like "D:20240131120000+05'30'".
-function pdfDate(value) {
-  const match = String(value || "").match(/^D?:?(\d{4})(\d{2})?(\d{2})?/);
-  if (!match) return "";
-  return [match[1], match[2], match[3]].filter(Boolean).join("-");
-}
-
-// Producers often leave junk like "Microsoft Word - draft3.docx" in the title.
-function usefulTitle(value) {
-  const title = cleanText(value);
-  if (!title || /^(?:untitled|microsoft word|document\d*|title)\b/i.test(title)) return "";
-  if (/\.(?:docx?|pdf|tex|indd|odt|pages)$/i.test(title)) return "";
-  return title;
 }
 
 async function renderCover(pdf) {
@@ -74,10 +60,6 @@ export async function readPdf(buffer, { cover = true } = {}) {
 
   try {
     const { info = {}, metadata } = await pdf.getMetadata().catch(() => ({}));
-    const fromXmp = (key) => cleanText(metadata?.get?.(key) || "");
-    const author = fromXmp("dc:creator") || cleanText(info.Author);
-    const keywords = cleanText(info.Keywords);
-
     let words = 0;
     let characters = 0;
     const pagesToRead = Math.min(pdf.numPages, MAX_TEXT_PAGES);
@@ -94,26 +76,17 @@ export async function readPdf(buffer, { cover = true } = {}) {
     }
     if (pagesToRead < pdf.numPages) words = Math.round((words / pagesToRead) * pdf.numPages);
 
-    const outline = await pdf.getOutline().catch(() => null);
     return {
       format: "pdf",
-      title: usefulTitle(fromXmp("dc:title") || info.Title),
-      authors: author ? author.split(/\s*(?:;|&|\band\b)\s*/).map(displayName).filter(Boolean) : [],
+      ...pdfMetadata(info, (key) => metadata?.get?.(key)),
       authorSort: "",
-      language: cleanText(fromXmp("dc:language") || info.Lang || "").split("-")[0].toLowerCase(),
-      description: fromXmp("dc:description") || cleanText(info.Subject),
       publisher: "",
-      published: pdfDate(info.CreationDate),
-      subjects: keywords ? keywords.split(/\s*[;,]\s*/).filter(Boolean) : [],
       isbn: "",
       series: "",
       seriesIndex: null,
       pages: pdf.numPages,
       words,
-      // Scanned PDFs have images but (almost) no selectable text; Hear cannot
-      // narrate them until they have been through OCR.
-      hasText: characters >= Math.max(240, pdf.numPages * 40),
-      hasOutline: Array.isArray(outline) && outline.length > 0,
+      hasText: hasSelectableText(characters, pdf.numPages),
       cover: cover ? await renderCover(pdf).catch(() => null) : null,
     };
   } finally {

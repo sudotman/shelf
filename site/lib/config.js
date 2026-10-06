@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+// shelf.yml parsing, shared by the build (Node) and the admin console
+// (browser). Keep this file free of Node imports.
 import { parseDocument } from "yaml";
 import { slugify } from "./text.js";
 
@@ -112,8 +113,4 @@ export function parseConfig(source, warn = () => {}) {
     shelves,
     books,
   };
-}
-
-export function loadConfig(path, warn) {
-  return parseConfig(existsSync(path) ? readFileSync(path, "utf8") : "", warn);
 }

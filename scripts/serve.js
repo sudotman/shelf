@@ -11,6 +11,7 @@ const PORT = Number(process.env.PORT) || 4321;
 const TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".xml": "application/atom+xml; charset=utf-8",

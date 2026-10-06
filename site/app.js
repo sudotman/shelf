@@ -1,40 +1,52 @@
 const $ = (selector) => document.querySelector(selector);
 
 const elements = {
-  ownerLine: $("#owner-line"),
-  title: $("#shelf-title"),
+  ownerName: $("#owner-name"),
   description: $("#shelf-description"),
-  stats: $("#shelf-stats"),
   search: $("#search"),
   query: $("#query"),
-  shelfFilter: $("#shelf-filter"),
-  formatFilter: $("#format-filter"),
-  sort: $("#sort"),
-  status: $("#status"),
-  grid: $("#grid"),
+  views: [...document.querySelectorAll("[data-view]")],
+  tally: $("#tally"),
+  bookcase: $("#bookcase"),
+  indexView: $("#index-view"),
+  indexRows: $("#index-rows"),
+  sortButtons: [...document.querySelectorAll("[data-sort]")],
+  noMatch: $("#no-match"),
   hearLink: $("#hear-link"),
   copyOpds: $("#copy-opds"),
   updatedLine: $("#updated-line"),
-  sheet: $("#book-sheet"),
-  closeSheet: $("#close-sheet"),
-  bookCover: $("#book-cover"),
-  bookEyebrow: $("#book-eyebrow"),
-  bookTitle: $("#book-title"),
-  bookAuthor: $("#book-author"),
-  bookFacts: $("#book-facts"),
-  bookListen: $("#book-listen"),
-  bookRead: $("#book-read"),
-  bookDownload: $("#book-download"),
-  bookListenNote: $("#book-listen-note"),
-  bookNote: $("#book-note"),
-  bookDescription: $("#book-description"),
-  bookTags: $("#book-tags"),
+  slip: $("#slip"),
+  slipClose: $("#slip-close"),
+  slipCover: $("#slip-cover"),
+  slipTitle: $("#slip-title"),
+  slipAuthor: $("#slip-author"),
+  slipListen: $("#slip-listen"),
+  slipRead: $("#slip-read"),
+  slipDownload: $("#slip-download"),
+  slipUnlistenable: $("#slip-unlistenable"),
+  slipLedger: $("#slip-ledger"),
+  slipNote: $("#slip-note"),
+  slipDescription: $("#slip-description"),
   toast: $("#toast"),
 };
 
-const STATUS_LABELS = { want: "Want to read", reading: "Reading", read: "Read" };
-const COVER_COLORS = ["#4c5663", "#6f4136", "#344e49", "#6a5940", "#4d3d55", "#5b4b43", "#38505a"];
-const state = { catalog: null, query: "", shelf: "", format: "", sort: "added", returnFocus: null, toastTimer: 0 };
+const STATUS = { want: "Want to read", reading: "Reading now", read: "Read" };
+// Cloth colours for books without a cover to sample.
+const CLOTH = ["#5b3a2e", "#2f4a46", "#3e4a63", "#6b5232", "#4f3a52", "#7a3324", "#33473a", "#2c3a4f"];
+const state = { catalog: null, view: "shelves", query: "", sort: "author", returnFocus: null, toastTimer: 0 };
+
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function hash(value) {
+  let result = 2166136261;
+  for (const character of value) result = Math.imul(result ^ character.codePointAt(0), 16777619);
+  return result >>> 0;
+}
 
 function normalize(value) {
   return String(value || "")
@@ -45,11 +57,46 @@ function normalize(value) {
     .trim();
 }
 
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
+// Shelved by author surname, as on a real bookcase.
+function authorKey(book) {
+  if (book.authorSort) return book.authorSort.toLowerCase();
+  const first = (book.authors?.[0] || book.author || "").trim();
+  const parts = first.split(/\s+/);
+  return `${parts.at(-1) || ""} ${parts.slice(0, -1).join(" ")}`.toLowerCase();
+}
+
+function titleKey(book) {
+  return book.title.replace(/^(?:the|a|an)\s+/i, "").toLowerCase();
+}
+
+function surnameFirst(book) {
+  if (book.authorSort) return book.authorSort;
+  const name = book.authors?.[0] || book.author || "";
+  const parts = name.trim().split(/\s+/);
+  return parts.length > 1 ? `${parts.at(-1)}, ${parts.slice(0, -1).join(" ")}` : name || "Anonymous";
+}
+
+function luminance(hex) {
+  const value = Number.parseInt(hex.slice(1), 16);
+  const channel = (shift) => {
+    const c = ((value >> shift) & 255) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
+}
+
+function bookColors(book) {
+  let spine = /^#[0-9a-f]{6}$/i.test(book.color) ? book.color : CLOTH[hash(book.id) % CLOTH.length];
+  // A plain white page (most PDFs) becomes an off-white paperback.
+  if (luminance(spine) > 0.82) spine = "#ece5d6";
+  return { spine, ink: luminance(spine) > 0.42 ? "#1f1b16" : "#f4ede1" };
+}
+
+function formatMinutes(minutes) {
+  if (!minutes) return "";
+  if (minutes < 60) return `${minutes} min`;
+  const rest = minutes % 60;
+  return `${Math.floor(minutes / 60)} h${rest ? ` ${rest} min` : ""}`;
 }
 
 function formatBytes(bytes) {
@@ -57,212 +104,272 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
-function formatMinutes(minutes) {
-  if (!minutes) return "";
-  if (minutes < 60) return `${minutes} min listen`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return `${hours} hr${rest >= 5 ? ` ${rest} min` : ""} listen`;
+function formatDate(value, options = { day: "numeric", month: "long", year: "numeric" }) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString("en-GB", options);
 }
 
-function coverColor(book) {
-  const seed = [...`${book.title}${book.author}`].reduce((sum, character) => sum + character.codePointAt(0), 0);
-  return COVER_COLORS[seed % COVER_COLORS.length];
+function matches(book, tokens) {
+  if (!tokens.length) return true;
+  const haystack = normalize([
+    book.title, book.subtitle, book.author, book.shelfLabel, book.series, book.note,
+    ...(book.tags || []), ...(book.subjects || []),
+  ].join(" "));
+  return tokens.every((token) => haystack.includes(token));
 }
 
-function renderCover(book, container, { eager = false } = {}) {
-  container.replaceChildren();
-  container.style.setProperty("--cover-color", coverColor(book));
-  container.classList.remove("has-image");
-  const fallback = element("span", "cover-fallback");
-  fallback.append(element("span", "cover-title", book.title), element("span", "cover-author", book.author));
-  container.append(fallback);
-  if (!book.cover) return;
+function queryTokens() {
+  return normalize(state.query).split(" ").filter(Boolean);
+}
+
+// ── Shelves ──────────────────────────────────────────────────────────────
+
+function shelfHeight() {
+  return Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--shelf-height")) || 236;
+}
+
+function spineFor(book) {
+  const { spine, ink } = bookColors(book);
+  const minutes = book.minutes || Math.round((book.pages || 30) * 1.4);
+  const width = Math.round(Math.min(76, Math.max(34, 20 + Math.sqrt(minutes) * 2.4)));
+  const seed = hash(`${book.id}:height`) / 2 ** 32;
+  const height = book.kind === "article" ? 0.72 + seed * 0.1 : 0.82 + seed * 0.18;
+  const titleSize = width < 40 || book.title.length > 30 ? 13 : 15;
+  // The file's sort name knows "Sun Tzu" is not "Tzu"; otherwise the last word.
+  const surname = book.authorSort?.split(",")[0].trim() || book.authors?.[0]?.split(/\s+/).at(-1) || "";
+  // Room along the spine, minus the bands; vertical type runs ~0.55em a letter.
+  const room = shelfHeight() * height - 44;
+  const showAuthor = surname && book.title.length * titleSize * 0.55 + surname.length * 7.5 + 10 <= room;
+  const slot = element("div", "slot");
+  const button = element("button", "spine");
+  button.type = "button";
+  button.dataset.id = book.id;
+  if (book.status) button.dataset.status = book.status;
+  button.style.setProperty("--spine", spine);
+  button.style.setProperty("--spine-ink", ink);
+  button.style.setProperty("--width", `${width}px`);
+  button.style.setProperty("--height", `calc(var(--shelf-height) * ${height.toFixed(3)})`);
+  button.style.setProperty("--title-size", `${titleSize}px`);
+  button.setAttribute("aria-label", [
+    book.title,
+    book.author ? `by ${book.author}` : "",
+    book.format.toUpperCase(),
+    book.minutes ? `${formatMinutes(book.minutes)} listen` : "",
+    STATUS[book.status] || "",
+  ].filter(Boolean).join(", "));
+  button.title = book.author ? `${book.title} — ${book.author}` : book.title;
+  if (book.status === "reading") button.append(element("span", "ribbon"));
+  button.append(element("span", "spine-title", book.title));
+  if (showAuthor) button.append(element("span", "spine-author", surname));
+  button.addEventListener("click", () => openBook(book.id, button));
+  slot.append(button);
+  return slot;
+}
+
+// One continuous bookcase: shelves follow each other along the planks,
+// separated by bookends, and wrap onto the next plank as the library grows.
+function renderShelves() {
+  const groups = new Map();
+  for (const book of state.catalog.books) {
+    const key = book.shelf || "";
+    if (!groups.has(key)) groups.set(key, { label: book.shelfLabel || "Unshelved", books: [] });
+    groups.get(key).books.push(book);
+  }
+  const ordered = [...groups.entries()].sort(([left, a], [right, b]) => (!left) - (!right) || a.label.localeCompare(b.label));
+  const named = ordered.some(([key]) => key);
+  const fragment = document.createDocumentFragment();
+  for (const [, group] of ordered) {
+    if (named) {
+      const bookend = element("div", "slot slot-bookend");
+      const label = element("h2", "bookend");
+      label.append(element("span", "bookend-name", group.label), element("span", "bookend-count", String(group.books.length)));
+      label.setAttribute("aria-label", `${group.label}, ${group.books.length} ${group.books.length === 1 ? "book" : "books"}`);
+      bookend.append(label);
+      fragment.append(bookend);
+    }
+    group.books
+      .sort((left, right) => authorKey(left).localeCompare(authorKey(right)) || titleKey(left).localeCompare(titleKey(right)))
+      .forEach((book) => fragment.append(spineFor(book)));
+  }
+  if (!state.catalog.books.length) {
+    const slot = element("div", "slot slot-empty");
+    slot.append(element("p", "empty-shelf", "Nothing on the shelves yet."));
+    fragment.append(slot);
+  }
+  elements.bookcase.replaceChildren(fragment);
+}
+
+// ── Index ────────────────────────────────────────────────────────────────
+
+const sorters = {
+  author: (left, right) => authorKey(left).localeCompare(authorKey(right)) || titleKey(left).localeCompare(titleKey(right)),
+  title: (left, right) => titleKey(left).localeCompare(titleKey(right)),
+  shelf: (left, right) => (left.shelfLabel || "~").localeCompare(right.shelfLabel || "~") || sorters.author(left, right),
+  length: (left, right) => (left.minutes || Infinity) - (right.minutes || Infinity),
+  added: (left, right) => String(right.addedAt).localeCompare(String(left.addedAt)),
+};
+
+function renderIndex() {
+  const tokens = queryTokens();
+  const books = state.catalog.books.filter((book) => matches(book, tokens)).sort(sorters[state.sort]);
+  elements.indexRows.replaceChildren(...books.map((book) => {
+    const row = element("tr");
+    row.dataset.id = book.id;
+    const titleCell = element("td", "cell-title");
+    const titleButton = element("button", "", book.title);
+    titleButton.type = "button";
+    titleButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openBook(book.id, titleButton);
+    });
+    titleCell.append(titleButton, element("span", "format", book.format.toUpperCase()));
+    row.append(
+      element("td", "cell-author", surnameFirst(book)),
+      titleCell,
+      element("td", "cell-shelf cell-meta", book.shelfLabel || "—"),
+      element("td", "cell-length cell-meta", formatMinutes(book.minutes) || (book.pages ? `${book.pages} pp` : "—")),
+      element("td", "cell-added cell-meta", formatDate(book.addedAt, { day: "numeric", month: "short", year: "numeric" })),
+    );
+    row.addEventListener("click", () => openBook(book.id, titleButton));
+    return row;
+  }));
+  elements.sortButtons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.sort === state.sort)));
+}
+
+// ── Search, tally, view ──────────────────────────────────────────────────
+
+function applySearch() {
+  const tokens = queryTokens();
+  let count = 0;
+  for (const spine of elements.bookcase.querySelectorAll(".spine")) {
+    const book = state.catalog.books.find((candidate) => candidate.id === spine.dataset.id);
+    const hit = matches(book, tokens);
+    count += hit ? 1 : 0;
+    spine.classList.toggle("is-dimmed", !hit);
+    spine.tabIndex = hit ? 0 : -1;
+    spine.setAttribute("aria-hidden", String(!hit));
+  }
+  if (state.view === "index") renderIndex();
+  if (!state.catalog.books.length) count = 0;
+  renderTally(tokens.length ? count : null);
+  elements.noMatch.hidden = !tokens.length || count > 0;
+  elements.noMatch.textContent = `Nothing on the shelves matches “${state.query.trim()}”.`;
+}
+
+function renderTally(matching = null) {
+  const { catalog } = state;
+  const total = catalog.books.length;
+  const hours = Math.round(catalog.books.reduce((sum, book) => sum + (book.minutes || 0), 0) / 60);
+  const latest = catalog.books.map((book) => book.addedAt).sort().at(-1);
+  elements.tally.textContent = matching === null
+    ? [
+      `${total} ${total === 1 ? "volume" : "volumes"}`,
+      hours ? `about ${hours} ${hours === 1 ? "hour" : "hours"} of listening` : "",
+      latest ? `last shelved ${formatDate(latest)}` : "",
+    ].filter(Boolean).join(" · ")
+    : `${matching} of ${total} ${total === 1 ? "volume" : "volumes"} match “${state.query.trim()}”`;
+}
+
+function setView(view) {
+  state.view = view === "index" ? "index" : "shelves";
+  elements.views.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.view === state.view)));
+  elements.bookcase.hidden = state.view !== "shelves";
+  elements.indexView.hidden = state.view !== "index";
+  if (state.view === "index") renderIndex();
+  try {
+    localStorage.setItem("shelf:view", state.view);
+  } catch {
+    // Storage can be unavailable (private windows); the view still works.
+  }
+}
+
+// ── Slip ─────────────────────────────────────────────────────────────────
+
+function ledgerRow(label, value) {
+  if (!value || (Array.isArray(value) && !value.length)) return [];
+  const term = element("dt", "", label);
+  const detail = element("dd");
+  if (value instanceof Node) detail.append(value);
+  else detail.textContent = value;
+  return [term, detail];
+}
+
+function renderSlipCover(book) {
+  const { spine, ink } = bookColors(book);
+  elements.slipCover.replaceChildren();
+  const typeset = element("div", "typeset-cover");
+  typeset.style.setProperty("--spine", spine);
+  typeset.style.setProperty("--spine-ink", ink);
+  typeset.append(element("span", "", book.title), element("small", "", book.author || ""));
+  if (!book.cover) {
+    elements.slipCover.append(typeset);
+    return;
+  }
   const image = new Image();
-  image.alt = "";
+  image.alt = `Cover of ${book.title}`;
   image.decoding = "async";
-  image.loading = eager ? "eager" : "lazy";
   if (book.coverWidth && book.coverHeight) {
     image.width = book.coverWidth;
     image.height = book.coverHeight;
   }
-  image.addEventListener("load", () => container.classList.add("has-image"), { once: true });
-  image.addEventListener("error", () => image.remove(), { once: true });
+  image.addEventListener("error", () => image.replaceWith(typeset), { once: true });
   image.src = book.cover;
-  container.prepend(image);
-}
-
-function matchScore(book, tokens) {
-  const title = normalize(`${book.title} ${book.subtitle}`);
-  const author = normalize(book.author);
-  const facets = normalize([book.shelfLabel, book.series, ...book.tags, ...book.subjects].join(" "));
-  const description = normalize(`${book.description} ${book.note}`);
-  let score = 0;
-  for (const token of tokens) {
-    let best = 0;
-    if (title.split(" ").includes(token)) best = 30;
-    else if (title.includes(token)) best = 20;
-    if (author.split(" ").includes(token)) best = Math.max(best, 24);
-    else if (author.includes(token)) best = Math.max(best, 14);
-    if (facets.includes(token)) best = Math.max(best, 12);
-    if (description.includes(token)) best = Math.max(best, 4);
-    if (!best) return 0;
-    score += best;
-  }
-  return score;
-}
-
-const sorters = {
-  added: (left, right) => String(right.addedAt).localeCompare(String(left.addedAt)) || left.title.localeCompare(right.title),
-  title: (left, right) => left.title.replace(/^(?:the|a|an)\s+/i, "").localeCompare(right.title.replace(/^(?:the|a|an)\s+/i, "")),
-  author: (left, right) => (left.authorSort || left.author).localeCompare(right.authorSort || right.author) || left.title.localeCompare(right.title),
-  length: (left, right) => (left.minutes || Infinity) - (right.minutes || Infinity) || left.title.localeCompare(right.title),
-};
-
-function visibleBooks() {
-  const tokens = normalize(state.query).split(" ").filter(Boolean);
-  let books = state.catalog.books.filter((book) => (
-    (!state.shelf || book.shelf === state.shelf) && (!state.format || book.format === state.format)
-  ));
-  if (tokens.length) {
-    books = books
-      .map((book) => ({ book, score: matchScore(book, tokens) }))
-      .filter(({ score }) => score > 0)
-      .sort((left, right) => right.score - left.score || sorters[state.sort](left.book, right.book))
-      .map(({ book }) => book);
-  } else {
-    books = [...books].sort(sorters[state.sort]);
-  }
-  return books;
-}
-
-function renderGrid() {
-  const books = visibleBooks();
-  const fragment = document.createDocumentFragment();
-  for (const book of books) {
-    const item = element("li", "book");
-    const button = element("button", "book-button");
-    button.type = "button";
-    button.dataset.id = book.id;
-    button.setAttribute("aria-label", `${book.title}${book.author ? ` by ${book.author}` : ""}, ${book.format.toUpperCase()}`);
-    const cover = element("span", "cover");
-    renderCover(book, cover);
-    const badges = element("span", "badges");
-    badges.append(element("span", "badge", book.format.toUpperCase()));
-    if (book.status) badges.append(element("span", `badge badge-${book.status}`, STATUS_LABELS[book.status]));
-    cover.append(badges);
-    button.append(cover, element("span", "book-title", book.title), element("span", "book-author", book.author || "Unknown author"));
-    button.addEventListener("click", () => openBook(book.id, button));
-    item.append(button);
-    fragment.append(item);
-  }
-  elements.grid.replaceChildren(fragment);
-
-  const total = state.catalog.books.length;
-  const filtered = Boolean(state.query || state.shelf || state.format);
-  if (!books.length) {
-    elements.status.textContent = state.query ? `Nothing on the shelf matches “${state.query}”.` : "No books here yet.";
-  } else {
-    elements.status.textContent = filtered ? `${books.length} of ${total} ${total === 1 ? "book" : "books"}` : "";
-  }
-}
-
-function renderShelfFilter() {
-  const shelves = state.catalog.shelves || [];
-  elements.shelfFilter.hidden = shelves.length < 2;
-  const options = [{ id: "", label: "All shelves", count: state.catalog.books.length }, ...shelves];
-  elements.shelfFilter.replaceChildren(...options.map((shelf) => {
-    const button = element("button");
-    button.type = "button";
-    button.dataset.shelf = shelf.id;
-    button.setAttribute("aria-pressed", String(shelf.id === state.shelf));
-    button.append(shelf.label, element("span", "chip-count", String(shelf.count)));
-    return button;
-  }));
-}
-
-function setPressed(container, attribute, value) {
-  container.querySelectorAll(`[data-${attribute}]`).forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset[attribute] === value));
-  });
-}
-
-function renderHeader() {
-  const { catalog } = state;
-  const minutes = catalog.books.reduce((sum, book) => sum + (book.minutes || 0), 0);
-  const hours = Math.round(minutes / 60);
-  document.title = catalog.title;
-  elements.title.textContent = catalog.title;
-  elements.description.textContent = catalog.description;
-  elements.description.hidden = !catalog.description;
-  elements.ownerLine.textContent = catalog.owner ? `Kept by ${catalog.owner}` : "A personal library";
-  elements.stats.textContent = [
-    `${catalog.count} ${catalog.count === 1 ? "book" : "books"}`,
-    hours ? `about ${hours} ${hours === 1 ? "hour" : "hours"} of listening` : "",
-  ].filter(Boolean).join(" · ");
-  if (catalog.hear) elements.hearLink.href = catalog.hear;
-  const feed = new URL("opds.xml", catalog.url || location.href).href;
-  elements.copyOpds.dataset.url = feed;
-  const updated = new Date(catalog.generatedAt);
-  elements.updatedLine.textContent = Number.isNaN(updated.getTime())
-    ? ""
-    : `Updated ${updated.toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" })}.`;
+  elements.slipCover.append(image);
 }
 
 function openBook(id, trigger = null, { updateHash = true } = {}) {
   const book = state.catalog?.books.find((candidate) => candidate.id === id);
   if (!book) return;
   state.returnFocus = trigger || document.activeElement;
-  renderCover(book, elements.bookCover, { eager: true });
-  elements.bookEyebrow.textContent = [book.shelfLabel, book.format.toUpperCase(), STATUS_LABELS[book.status]].filter(Boolean).join(" · ");
-  elements.bookTitle.textContent = book.subtitle ? `${book.title}: ${book.subtitle}` : book.title;
-  elements.bookAuthor.textContent = book.author || "Unknown author";
-  elements.bookFacts.textContent = [
-    book.year,
-    book.series ? `${book.series}${book.seriesIndex ? ` #${book.seriesIndex}` : ""}` : "",
-    book.pages ? `${book.pages} pages` : "",
-    formatMinutes(book.minutes),
-    formatBytes(book.size),
-    book.rating ? `${"★".repeat(book.rating)}${"☆".repeat(5 - book.rating)}` : "",
-  ].filter(Boolean).join(" · ");
+  renderSlipCover(book);
+  elements.slipTitle.textContent = book.subtitle ? `${book.title}: ${book.subtitle}` : book.title;
+  elements.slipAuthor.textContent = book.author || "Anonymous";
 
-  elements.bookListen.hidden = !book.hear;
-  if (book.hear) elements.bookListen.href = book.hear;
-  elements.bookListenNote.hidden = book.listenable;
-  elements.bookListenNote.textContent = book.listenable ? "" : `Not available in Hear: ${book.listenNote}`;
-  elements.bookRead.href = book.file;
-  elements.bookRead.hidden = book.format !== "pdf";
-  elements.bookDownload.href = book.file;
-  elements.bookDownload.download = book.fileName;
-  elements.bookDownload.textContent = `Download ${book.format.toUpperCase()}`;
+  elements.slipListen.hidden = !book.hear;
+  if (book.hear) elements.slipListen.href = book.hear;
+  elements.slipUnlistenable.hidden = book.listenable;
+  elements.slipUnlistenable.textContent = book.listenable ? "" : `Not available in Hear: ${book.listenNote}`;
+  elements.slipRead.href = book.file;
+  elements.slipRead.hidden = book.format !== "pdf";
+  elements.slipDownload.href = book.file;
+  elements.slipDownload.download = book.fileName;
+  elements.slipDownload.textContent = `Download ${book.format.toUpperCase()}`;
 
-  elements.bookNote.hidden = !book.note;
-  elements.bookNote.textContent = book.note;
-  elements.bookDescription.textContent = book.description;
-  elements.bookDescription.hidden = !book.description;
-  elements.bookTags.replaceChildren(...book.tags.map((tag) => {
-    const item = element("li");
-    const button = element("button", "", `#${tag}`);
+  const tags = document.createDocumentFragment();
+  for (const tag of book.tags || []) {
+    const button = element("button", "tag", tag);
     button.type = "button";
     button.addEventListener("click", () => {
-      elements.sheet.close();
+      elements.slip.close();
       search(tag);
     });
-    item.append(button);
-    return item;
-  }));
-  elements.bookTags.hidden = !book.tags.length;
+    tags.append(button);
+  }
+  elements.slipLedger.replaceChildren(
+    ...ledgerRow("Shelf", book.shelfLabel),
+    ...ledgerRow("Status", STATUS[book.status]),
+    ...ledgerRow("Length", [formatMinutes(book.minutes) && `${formatMinutes(book.minutes)} listen`, book.pages && `${book.pages} pages`].filter(Boolean).join(" · ")),
+    ...ledgerRow("Edition", [book.format.toUpperCase(), formatBytes(book.size), book.year, book.publisher].filter(Boolean).join(" · ")),
+    ...ledgerRow("Series", book.series ? `${book.series}${book.seriesIndex ? `, no. ${book.seriesIndex}` : ""}` : ""),
+    ...ledgerRow("Rating", book.rating ? `${"★".repeat(book.rating)}${"☆".repeat(5 - book.rating)}` : ""),
+    ...ledgerRow("Shelved", formatDate(book.addedAt)),
+    ...ledgerRow("Tags", book.tags?.length ? tags : ""),
+  );
+  elements.slipNote.hidden = !book.note;
+  elements.slipNote.textContent = book.note;
+  elements.slipDescription.hidden = !book.description;
+  elements.slipDescription.textContent = book.description;
 
-  if (!elements.sheet.open) elements.sheet.showModal();
-  elements.sheet.scrollTop = 0;
+  if (!elements.slip.open) elements.slip.showModal();
+  elements.slip.scrollTop = 0;
   if (updateHash) history.replaceState(null, "", `#${encodeURIComponent(book.id)}`);
 }
 
 function search(query) {
   state.query = query;
   elements.query.value = query;
-  renderGrid();
-  elements.grid.scrollIntoView({ behavior: "smooth", block: "start" });
+  applySearch();
+  elements.query.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function showToast(message) {
@@ -275,50 +382,42 @@ function showToast(message) {
 function openFromHash() {
   const id = decodeURIComponent(location.hash.slice(1));
   if (id) openBook(id, null, { updateHash: false });
-  else if (elements.sheet.open) elements.sheet.close();
+  else if (elements.slip.open) elements.slip.close();
 }
+
+// ── Events ───────────────────────────────────────────────────────────────
 
 elements.search.addEventListener("submit", (event) => event.preventDefault());
 elements.query.addEventListener("input", () => {
   state.query = elements.query.value;
-  renderGrid();
+  applySearch();
 });
-elements.shelfFilter.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-shelf]");
-  if (!button) return;
-  state.shelf = button.dataset.shelf;
-  setPressed(elements.shelfFilter, "shelf", state.shelf);
-  renderGrid();
+elements.views.forEach((button) => button.addEventListener("click", () => {
+  setView(button.dataset.view);
+  applySearch();
+}));
+elements.sortButtons.forEach((button) => button.addEventListener("click", () => {
+  state.sort = button.dataset.sort;
+  renderIndex();
+}));
+elements.slipClose.addEventListener("click", () => elements.slip.close());
+elements.slip.addEventListener("click", (event) => {
+  if (event.target === elements.slip) elements.slip.close();
 });
-elements.formatFilter.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-format]");
-  if (!button) return;
-  state.format = button.dataset.format;
-  setPressed(elements.formatFilter, "format", state.format);
-  renderGrid();
-});
-elements.sort.addEventListener("change", () => {
-  state.sort = elements.sort.value;
-  renderGrid();
-});
-elements.closeSheet.addEventListener("click", () => elements.sheet.close());
-elements.sheet.addEventListener("click", (event) => {
-  if (event.target === elements.sheet) elements.sheet.close();
-});
-elements.sheet.addEventListener("close", () => {
+elements.slip.addEventListener("close", () => {
   if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   state.returnFocus?.focus?.({ preventScroll: true });
 });
 elements.copyOpds.addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(elements.copyOpds.dataset.url);
-    showToast("OPDS feed link copied");
+    showToast("OPDS feed link copied — add it to your reading app");
   } catch {
     showToast(elements.copyOpds.dataset.url);
   }
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "/" || elements.sheet.open) return;
+  if (event.key !== "/" || elements.slip.open) return;
   if (/^(?:INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) return;
   event.preventDefault();
   elements.query.focus();
@@ -331,13 +430,27 @@ async function start() {
     if (!response.ok) throw new Error(`catalog.json returned ${response.status}`);
     state.catalog = await response.json();
   } catch (error) {
-    elements.stats.textContent = "The catalog could not be loaded.";
-    elements.status.textContent = error.message;
+    elements.tally.textContent = `The catalogue could not be opened (${error.message}).`;
     return;
   }
-  renderHeader();
-  renderShelfFilter();
-  renderGrid();
+  const { catalog } = state;
+  document.title = catalog.title;
+  elements.ownerName.textContent = catalog.owner || catalog.title;
+  elements.description.textContent = catalog.description;
+  elements.description.hidden = !catalog.description;
+  if (catalog.hear) elements.hearLink.href = catalog.hear;
+  elements.copyOpds.dataset.url = new URL("opds.xml", catalog.url || location.href).href;
+  elements.updatedLine.textContent = `Catalogue rebuilt ${formatDate(catalog.generatedAt)}.`;
+
+  renderShelves();
+  let savedView = "shelves";
+  try {
+    savedView = localStorage.getItem("shelf:view") || "shelves";
+  } catch {
+    // Default to the shelves.
+  }
+  setView(savedView);
+  applySearch();
   openFromHash();
 }
 

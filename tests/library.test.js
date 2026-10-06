@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DOMParser } from "@xmldom/xmldom";
 import { strToU8, zipSync } from "fflate";
-import { buildCatalog, buildEntry, buildOpds, shelfLabel } from "../scripts/lib/catalog.js";
-import { parseConfig } from "../scripts/lib/config.js";
-import { readEpub } from "../scripts/lib/epub.js";
-import { displayName, escapeXml, listeningMinutes, slugify, stripHtml } from "../scripts/lib/text.js";
+import { buildCatalog, buildEntry, buildOpds, shelfLabel } from "../site/lib/catalog.js";
+import { parseConfig } from "../site/lib/config.js";
+import { readEpub } from "../site/lib/epub.js";
+import { displayName, escapeXml, listeningMinutes, slugify, stripHtml } from "../site/lib/text.js";
 
 const PNG = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
 
@@ -145,7 +145,7 @@ test("listenability follows Hear's limits", () => {
 });
 
 test("OPDS feed is well-formed with absolute links", () => {
-  const catalog = buildCatalog([entryFor({ override: { description: "Ponds & <woods>" } })], settings, "2026-10-05T00:00:00.000Z");
+  const catalog = buildCatalog([entryFor({ override: { description: "Ponds & <woods>" } })], settings, { generatedAt: "2026-10-05T00:00:00.000Z" });
   assert.deepEqual(catalog.shelves, [{ id: "essays", label: "Essays", count: 1 }]);
   const xml = buildOpds(catalog);
   let fatal = null;
